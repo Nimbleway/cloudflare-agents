@@ -300,7 +300,12 @@ export class NimbleRunAgent extends Agent<Env, AgentState> {
         throw new NimbleAgentAPIError(`Unknown run status: ${status}`, { refId: runId });
       }
       if (Date.now() > deadline) {
-        this.upsertLedger(fiberKey, { status: "failed", lastError: "Polling deadline exceeded" });
+        // The adapter's polling budget expiring is not a provider terminal
+        // failure. Preserve the last provider status so a later status/result
+        // read can reconcile this durable run with a safe GET. Marking it
+        // "failed" here would make classifyStatus() treat the row as terminal
+        // and permanently disable that resumability path.
+        this.upsertLedger(fiberKey, { lastError: "Polling deadline exceeded" });
         throw new PollTimeoutError("Timed out waiting for a terminal Nimble run status", {
           refId: runId,
         });

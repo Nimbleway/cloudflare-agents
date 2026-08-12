@@ -155,6 +155,36 @@ describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, neve
     });
   });
 
+  it("reconciles a run after the local polling deadline without treating it as provider-failed", async () => {
+    const stub = (await getAgentByName(
+      typedEnv.NIMBLE_RUN_AGENT,
+      "session-reconcile-poll-deadline",
+    )) as unknown as NimbleRunAgent;
+
+    const outcome = await stub.startRun({
+      nimbleAgentId: AGENT_ID,
+      request: { input: "continue after the adapter polling budget" },
+    });
+    await waitUntil(() => statusCalls >= 1);
+
+    // This is the durable state pollUntilTerminal leaves after its local
+    // five-minute budget expires: the provider still says running and the
+    // adapter records a diagnostic. A later ordinary read must remain able
+    // to perform one safe reconciliation GET.
+    await freezeLedgerRow(stub as unknown as DurableObjectStub, outcome.fiberKey, {
+      status: "running",
+      lastError: "Polling deadline exceeded",
+      updatedAt: Date.now() - 60_000,
+    });
+
+    const statusCallsBefore = statusCalls;
+    const status = await stub.getRunLifecycleStatus(outcome.fiberKey);
+    expect(statusCalls).toBe(statusCallsBefore + 1);
+    expect(status.status).toBe("completed");
+    expect(status.lastError).toBeNull();
+    expect(createCalls).toBe(1);
+  });
+
   it("does not reconcile again within the same poll interval (avoids GET spam on a healthy row)", async () => {
     const stub = (await getAgentByName(
       typedEnv.NIMBLE_RUN_AGENT,

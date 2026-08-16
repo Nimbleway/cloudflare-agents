@@ -36,6 +36,13 @@ Set `NIMBLE_API_KEY` as a Worker secret. The agent also accepts an ephemeral
 per-request key override; that value is never persisted in its recovery
 snapshot or run ledger.
 
+If a Worker serves multiple authenticated principals, route each trusted
+principal to a separately named `NimbleRunAgent` instance. Do not multiplex
+untrusted users into one instance: its deterministic create deduplication and
+durable ledger are intentionally scoped to the Durable Object instance. HTTP
+authentication and trusted-principal derivation remain the consuming Worker's
+responsibility.
+
 ## Lifecycle guarantees
 
 - Create calls use `maxRetries: 0` to avoid duplicate billable work.
@@ -45,6 +52,11 @@ snapshot or run ledger.
 - Recovery resumes persisted runs and fails closed when an ephemeral key is no
   longer available.
 - Production polling defaults to 10 seconds and rejects shorter intervals.
+- `startRun()` accepts work asynchronously, so its first response can have a
+  `null` run ID; read lifecycle status to obtain the durable agent/run IDs.
+- Background polling has a five-minute local budget. If the provider run is
+  still active, later status/result reads reconcile it with safe GETs rather
+  than treating the local timeout as a provider failure.
 
 The package owns resumability and Agent API V2 lifecycle behavior. HTTP auth,
 UI/playgrounds, hosted deployments, and AI Gateway transport remain concerns

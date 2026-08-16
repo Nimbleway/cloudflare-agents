@@ -509,19 +509,43 @@ export class NimbleRunAgent extends Agent<Env, AgentState> {
           "override to read its result (the server fallback key is never substituted).",
       };
     }
-    if (row.status !== "completed") {
+    if (row.status !== "completed" && row.status !== "failed") {
       return {
         fiberKey,
         runId: row.runId,
         agentId: row.agentId || null,
         status: row.status,
         result: null,
-        error: row.status === "failed" ? row.lastError : null,
+        error: row.lastError,
       };
     }
     const client = this.client(apiKeyOverride);
-    const result = await client.getRunResult(row.agentId, row.runId);
-    return { fiberKey, runId: row.runId, agentId: row.agentId || null, status: row.status, result, error: null };
+    try {
+      const result = await client.getRunResult(row.agentId, row.runId);
+      return {
+        fiberKey,
+        runId: row.runId,
+        agentId: row.agentId || null,
+        status: row.status,
+        result,
+        error: result.error?.message ?? null,
+      };
+    } catch (err) {
+      // Completed-result reads retain their existing exception behavior. A
+      // provider-failed run, however, must still return a useful diagnostic
+      // if its structured failure envelope cannot be fetched.
+      if (row.status === "completed") throw err;
+      return {
+        fiberKey,
+        runId: row.runId,
+        agentId: row.agentId || null,
+        status: row.status,
+        result: null,
+        error:
+          row.lastError ??
+          (err instanceof Error ? err.message : "Nimble run failed; result details unavailable"),
+      };
+    }
   }
 
   /**

@@ -31,11 +31,27 @@ async function waitUntil(
 describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, never a create", () => {
   let createCalls = 0;
   let statusCalls = 0;
+  let resultCalls = 0;
+  let resultPayload: Record<string, unknown>;
   let seenAuthHeaders: string[] = [];
 
   beforeEach(() => {
     createCalls = 0;
     statusCalls = 0;
+    resultCalls = 0;
+    resultPayload = {
+      run: { id: RUN_ID, status: "completed", web_search_agent_id: AGENT_ID },
+      output: {
+        type: "text",
+        content: "done",
+        trust: {
+          confidence: "high",
+          reasoning: "single corroborated source",
+          claims: [],
+          sources: [{ type: "primary", url: "https://example.com" }],
+        },
+      },
+    };
     seenAuthHeaders = [];
     vi.stubGlobal(
       "fetch",
@@ -58,23 +74,11 @@ describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, neve
           });
         }
         if (url.endsWith("/result")) {
-          // Real Agent API V2 envelope: content/trust nest under `output`.
-          return new Response(
-            JSON.stringify({
-              run: { id: RUN_ID, status: "completed", web_search_agent_id: AGENT_ID },
-              output: {
-                type: "text",
-                content: "done",
-                trust: {
-                  confidence: "high",
-                  reasoning: "single corroborated source",
-                  claims: [],
-                  sources: [{ type: "primary", url: "https://example.com" }],
-                },
-              },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
+          resultCalls += 1;
+          return new Response(JSON.stringify(resultPayload), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
         }
         return new Response("not found", { status: 404 });
       }),
@@ -182,6 +186,65 @@ describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, neve
     expect(statusCalls).toBe(statusCallsBefore + 1);
     expect(status.status).toBe("completed");
     expect(status.lastError).toBeNull();
+    expect(createCalls).toBe(1);
+  });
+
+  it("returns a provider-failed run's structured result envelope and message", async () => {
+    const stub = (await getAgentByName(
+      typedEnv.NIMBLE_RUN_AGENT,
+      "session-result-provider-failed",
+    )) as unknown as NimbleRunAgent;
+
+    const outcome = await stub.startRun({
+      nimbleAgentId: AGENT_ID,
+      request: { input: "surface a synthetic provider failure" },
+    });
+    await waitUntil(() => statusCalls >= 1);
+
+    await freezeLedgerRow(stub as unknown as DurableObjectStub, outcome.fiberKey, {
+      status: "failed",
+      lastError: null,
+      updatedAt: Date.now(),
+    });
+    resultPayload = {
+      run: { id: RUN_ID, status: "failed", web_search_agent_id: AGENT_ID },
+      error: { message: "Synthetic provider failure.", ref_id: RUN_ID },
+    };
+
+    const result = await stub.getRunTypedResult(outcome.fiberKey);
+    expect(resultCalls).toBe(1);
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("Synthetic provider failure.");
+    expect(result.result?.error).toEqual({
+      message: "Synthetic provider failure.",
+      refId: RUN_ID,
+    });
+    expect(createCalls).toBe(1);
+  });
+
+  it("surfaces a non-terminal polling diagnostic without fetching a result or creating", async () => {
+    const stub = (await getAgentByName(
+      typedEnv.NIMBLE_RUN_AGENT,
+      "session-result-poll-deadline",
+    )) as unknown as NimbleRunAgent;
+
+    const outcome = await stub.startRun({
+      nimbleAgentId: AGENT_ID,
+      request: { input: "surface the local polling diagnostic" },
+    });
+    await waitUntil(() => statusCalls >= 1);
+
+    await freezeLedgerRow(stub as unknown as DurableObjectStub, outcome.fiberKey, {
+      status: "running",
+      lastError: "Polling deadline exceeded",
+      updatedAt: Date.now(),
+    });
+
+    const result = await stub.getRunTypedResult(outcome.fiberKey);
+    expect(resultCalls).toBe(0);
+    expect(result.status).toBe("running");
+    expect(result.result).toBeNull();
+    expect(result.error).toBe("Polling deadline exceeded");
     expect(createCalls).toBe(1);
   });
 

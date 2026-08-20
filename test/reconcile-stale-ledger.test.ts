@@ -33,12 +33,14 @@ describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, neve
   let statusCalls = 0;
   let resultCalls = 0;
   let resultPayload: Record<string, unknown>;
+  let resultStatus = 200;
   let seenAuthHeaders: string[] = [];
 
   beforeEach(() => {
     createCalls = 0;
     statusCalls = 0;
     resultCalls = 0;
+    resultStatus = 200;
     resultPayload = {
       run: { id: RUN_ID, status: "completed", web_search_agent_id: AGENT_ID },
       output: {
@@ -76,7 +78,7 @@ describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, neve
         if (url.endsWith("/result")) {
           resultCalls += 1;
           return new Response(JSON.stringify(resultPayload), {
-            status: 200,
+            status: resultStatus,
             headers: { "content-type": "application/json" },
           });
         }
@@ -220,6 +222,42 @@ describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, neve
       refId: RUN_ID,
     });
     expect(createCalls).toBe(1);
+  });
+
+  it("never returns an ambiguous {result:null,error:null} for a terminal cancelled run", async () => {
+    const stub = (await getAgentByName(
+      typedEnv.NIMBLE_RUN_AGENT,
+      "session-result-cancelled",
+    )) as unknown as NimbleRunAgent;
+
+    const outcome = await stub.startRun({
+      nimbleAgentId: AGENT_ID,
+      request: { input: "surface a synthetic cancellation" },
+    });
+    await waitUntil(() => statusCalls >= 1);
+
+    // pollUntilTerminal's terminal-detection branch unconditionally clears
+    // lastError to null for ANY terminal status (completed, failed, or
+    // cancelled) — this is the exact durable state a real cancellation
+    // leaves behind.
+    await freezeLedgerRow(stub as unknown as DurableObjectStub, outcome.fiberKey, {
+      status: "cancelled",
+      lastError: null,
+      updatedAt: Date.now(),
+    });
+    resultStatus = 422;
+    resultPayload = { detail: "Run was cancelled by the operator." };
+
+    const result = await stub.getRunTypedResult(outcome.fiberKey);
+    expect(result.status).toBe("cancelled");
+    // The bug this reproduces: without the fix, getRunTypedResult's
+    // completed/failed-only gate never even attempts the result fetch for
+    // "cancelled" and returns {result:null,error:null} — indistinguishable
+    // from a run that is merely still in progress.
+    expect(result.error).not.toBeNull();
+    expect(result.error).toBe("Run was cancelled by the operator.");
+    expect(result.result).toBeNull();
+    expect(createCalls).toBe(1); // never a create
   });
 
   it("surfaces a non-terminal polling diagnostic without fetching a result or creating", async () => {

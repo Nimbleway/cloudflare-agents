@@ -237,9 +237,14 @@ export class NimbleRunAgent extends Agent<Env, AgentState> {
     const receipt = await this.startFiber(
       fiberKey,
       async (ctx) => {
-        const client = this.client(input.apiKeyOverride);
         let run;
         try {
+          // Client construction (missing override AND missing
+          // env.NIMBLE_API_KEY throws) must happen inside this try/catch —
+          // otherwise that throw bypasses the failure handler below and
+          // leaves the ledger row initialized above stuck "queued" forever
+          // with no lastError to explain why.
+          const client = this.client(input.apiKeyOverride);
           run = await client.createRun(input.nimbleAgentId, input.request);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -509,7 +514,16 @@ export class NimbleRunAgent extends Agent<Env, AgentState> {
           "override to read its result (the server fallback key is never substituted).",
       };
     }
-    if (row.status !== "completed" && row.status !== "failed") {
+    // Any active (non-terminal) status still has no result to fetch yet.
+    // Every terminal status — completed, failed, AND cancelled — must reach
+    // the provider fetch below: cancelled is terminal per classifyStatus()
+    // (see TERMINAL_STATES), and the catch below turns a result-endpoint
+    // rejection into a useful diagnostic. Gating on the two literal
+    // strings "completed"/"failed" silently excluded "cancelled", which fell
+    // through to this early return with lastError already nulled out by
+    // pollUntilTerminal's terminal-detection branch — producing
+    // {result:null,error:null}, indistinguishable from "still running".
+    if (classifyStatus(row.status) !== "terminal") {
       return {
         fiberKey,
         runId: row.runId,

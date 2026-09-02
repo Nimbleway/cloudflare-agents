@@ -2,19 +2,9 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { getAgentByName } from "agents";
 import type { Env, NimbleRunAgent } from "../src/agent";
+import { waitUntil } from "./helpers";
 
 const typedEnv = env as unknown as Env;
-
-async function waitUntil(
-  predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error("waitUntil timed out");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 /**
  * Reproduces a start-time gap: startRun()'s fiber callback previously built

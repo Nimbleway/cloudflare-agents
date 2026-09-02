@@ -2,22 +2,12 @@ import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { getAgentByName } from "agents";
 import type { Env, NimbleRunAgent } from "../src/agent";
+import { waitUntil } from "./helpers";
 
 const typedEnv = env as unknown as Env;
 
 const AGENT_ID = "wsa_recover1";
 const RUN_ID = "task_run_recover1";
-
-async function waitUntil(
-  predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error("waitUntil timed out");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 /**
  * These tests exercise the real Durable Object under workerd (via

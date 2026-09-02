@@ -2,22 +2,12 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { getAgentByName } from "agents";
 import type { Env, NimbleRunAgent, RunLedgerRow } from "../src/agent";
+import { waitUntil } from "./helpers";
 
 const typedEnv = env as unknown as Env;
 
 const AGENT_ID = "wsa_stale1";
 const RUN_ID = "task_run_stale1";
-
-async function waitUntil(
-  predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error("waitUntil timed out");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 /**
  * Reproduces a recovery edge case: a run's background fiber stops
@@ -257,6 +247,37 @@ describe("NimbleRunAgent — reconciles a frozen ledger row via a safe GET, neve
     expect(result.error).not.toBeNull();
     expect(result.error).toBe("Run was cancelled by the operator.");
     expect(result.result).toBeNull();
+    expect(createCalls).toBe(1); // never a create
+  });
+
+  it("never returns error:null for a non-completed terminal run whose result endpoint answers 200 with no diagnostic", async () => {
+    const stub = (await getAgentByName(
+      typedEnv.NIMBLE_RUN_AGENT,
+      "session-result-cancelled-empty-200",
+    )) as unknown as NimbleRunAgent;
+
+    const outcome = await stub.startRun({
+      nimbleAgentId: AGENT_ID,
+      request: { input: "surface a synthetic cancellation with an empty 200 envelope" },
+    });
+    await waitUntil(() => statusCalls >= 1);
+
+    await freezeLedgerRow(stub as unknown as DurableObjectStub, outcome.fiberKey, {
+      status: "cancelled",
+      lastError: null,
+      updatedAt: Date.now(),
+    });
+    // 200 OK, but the envelope carries neither `output` nor `error`. Nothing
+    // throws here, so a naive `result.error?.message ?? null` would silently
+    // produce `error: null` for a non-completed terminal run.
+    resultStatus = 200;
+    resultPayload = { run: { id: RUN_ID, status: "cancelled", web_search_agent_id: AGENT_ID } };
+
+    const result = await stub.getRunTypedResult(outcome.fiberKey);
+    expect(result.status).toBe("cancelled");
+    expect(result.error).not.toBeNull();
+    expect(result.error).toMatch(/cancelled/);
+    expect(result.result).toMatchObject({ outputType: "unknown", content: null, error: null });
     expect(createCalls).toBe(1); // never a create
   });
 

@@ -239,11 +239,8 @@ export class NimbleRunAgent extends Agent<Env, AgentState> {
       async (ctx) => {
         let run;
         try {
-          // Client construction (missing override AND missing
-          // env.NIMBLE_API_KEY throws) must happen inside this try/catch —
-          // otherwise that throw bypasses the failure handler below and
-          // leaves the ledger row initialized above stuck "queued" forever
-          // with no lastError to explain why.
+          // Must construct the client inside this try: a missing-key throw
+          // here still needs to record the ledger failure below.
           const client = this.client(input.apiKeyOverride);
           run = await client.createRun(input.nimbleAgentId, input.request);
         } catch (err) {
@@ -514,15 +511,9 @@ export class NimbleRunAgent extends Agent<Env, AgentState> {
           "override to read its result (the server fallback key is never substituted).",
       };
     }
-    // Any active (non-terminal) status still has no result to fetch yet.
-    // Every terminal status — completed, failed, AND cancelled — must reach
-    // the provider fetch below: cancelled is terminal per classifyStatus()
-    // (see TERMINAL_STATES), and the catch below turns a result-endpoint
-    // rejection into a useful diagnostic. Gating on the two literal
-    // strings "completed"/"failed" silently excluded "cancelled", which fell
-    // through to this early return with lastError already nulled out by
-    // pollUntilTerminal's terminal-detection branch — producing
-    // {result:null,error:null}, indistinguishable from "still running".
+    // Active (non-terminal) statuses have no result yet. Every terminal
+    // status must reach the fetch below, so this gates on classification
+    // (TERMINAL_STATES), not a hand-maintained status list.
     if (classifyStatus(row.status) !== "terminal") {
       return {
         fiberKey,
@@ -536,13 +527,19 @@ export class NimbleRunAgent extends Agent<Env, AgentState> {
     const client = this.client(apiKeyOverride);
     try {
       const result = await client.getRunResult(row.agentId, row.runId);
+      // A 200 response with neither `output` nor `error` (normalizeRunResult's
+      // empty fallback) is not a real result. For any non-completed terminal
+      // status this must not surface as {error: null} — that reads as success.
+      const noDiagnostic = row.status !== "completed" && result.error === null && result.outputType === "unknown";
       return {
         fiberKey,
         runId: row.runId,
         agentId: row.agentId || null,
         status: row.status,
         result,
-        error: result.error?.message ?? null,
+        error: noDiagnostic
+          ? `Nimble run ended with status "${row.status}"; the result endpoint returned no diagnostic.`
+          : (result.error?.message ?? null),
       };
     } catch (err) {
       // Completed-result reads retain their existing exception behavior. A

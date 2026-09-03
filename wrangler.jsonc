@@ -1,0 +1,44 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nimble-cloudflare-agents-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "NIMBLE_RUN_AGENT",
+        "class_name": "NimbleRunAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["NimbleRunAgent"]
+    }
+  ],
+  "env": {
+    "test": {
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "NIMBLE_RUN_AGENT",
+            "class_name": "NimbleRunAgent"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["NimbleRunAgent"]
+        }
+      ],
+      "vars": {
+        "NIMBLE_API_KEY": "test-fake-key-not-a-real-credential",
+        "NIMBLE_POLL_INTERVAL_MS": "100",
+        "NIMBLE_TEST_ALLOW_SHORT_POLL_INTERVALS": "true"
+      }
+    }
+  }
+}

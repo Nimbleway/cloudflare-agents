@@ -52,9 +52,8 @@ jobs:
           REF_NAME: ${{ github.event.release.tag_name }}
         run: |
           PKG="$(node -p "require('./package.json').version")"
-          TAG="${REF_NAME#v}"
-          if [ "$PKG" != "$TAG" ]; then
-            echo "::error::package.json version ($PKG) does not match release tag ($TAG)"
+          if [ "$REF_NAME" != "v$PKG" ]; then
+            echo "::error::release tag ($REF_NAME) must be v$PKG"
             exit 1
           fi
 

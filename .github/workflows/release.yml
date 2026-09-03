@@ -1,0 +1,64 @@
+name: release
+
+# Publishes @nimble-way/cloudflare-agents to npm via Trusted Publishing (OIDC, no
+# API token) when a GitHub Release is published.
+#
+# One-time setup, both required before the first run:
+#   1. Configure the package's trusted publisher at
+#      https://www.npmjs.com/package/@nimble-way/cloudflare-agents/access
+#      pointing at this repository, the `release.yml` workflow, and the
+#      `release` environment. See https://docs.npmjs.com/trusted-publishers.
+#      The package must already exist on npm; npm cannot pre-register a name.
+#   2. Create a `release` environment in this repository's settings.
+#
+# The release tag must be vX.Y.Z and match the version in package.json.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+# Only one publish run per ref; never cancel an in-flight publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Node 24, not the 20 that ci.yml uses: trusted publishing requires npm
+      # >= 11.5.1 and Node >= 22.14.0, and Node 20 ships npm 10.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - run: npm ci
+
+      # lint, typecheck, test, then build, in that order. Leaves dist/ in place,
+      # which is the only thing package.json `files` ships.
+      - run: npm run check
+
+      # Guard against publishing a version that doesn't match the release tag.
+      - name: Verify tag matches package.json version
+        env:
+          REF_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          TAG="${REF_NAME#v}"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::package.json version ($PKG) does not match release tag ($TAG)"
+            exit 1
+          fi
+
+      # No --provenance flag and no NODE_AUTH_TOKEN: trusted publishing attaches
+      # a provenance attestation by default and authenticates from the OIDC
+      # identity. --access public is kept explicit for the scoped package.
+      - run: npm publish --access public
